@@ -21,8 +21,43 @@ Durations are given in (int)(unit), where units are y, m, d, h or w.
 	* `contact_phone`: (optional) A private contact phone number for course responsible
 	* `assistants`: (optional/a+) A list of assistant student ids
 	* `start`: (optional/a+) The course instance start date
-	* `end`: (optional/a+) The course instance end/archive date
+	* `end`: (optional/a+) The course instance end date
 	* `static_dir`: (optional) This subdirectory will be linked to URL /static/course_key
+	* `head_urls`: (optional/a+) A list of URLs to JS and CSS files that A+ includes
+		on all course pages. For example, a common JavaScript library could be included
+		this way without adding it separately to each exercise description.
+	* `enrollment_start`: The enrollment start date
+	* `enrollment_end`: The enrollment end date
+	* `lifesupport_time`: The lifesupport date (model answers are hidden from students)
+	* `archive_time`: The archive date (no submissions allowed after it)
+	* `enrollment_audience`: Selects the user group that is allowed to enroll in the course. One of the following:
+		* `internal`: only internal students
+		  (they have a student number and should log-in with internal accounts)
+		* `external`: only external students (no student number and login with Google accounts)
+		* `all`: internal and external students
+	* `view_content_to`: Selects the user group that may view course contents. One of the following:
+		* `enrolled`: only enrolled students
+		* `enrollment_audience`: logged-in users in the enrollment audience (the audience is set separately)
+		* `all_registered`: all logged-in users
+		* `public`: all anonymous and authenticated users
+	* `index_mode`: Selects the display mode for the course front page. One of the following:
+		* `results`: exercise results
+		* `toc`: table of contents
+		* `last`: opens the page that the user viewed last time
+		* `experimental`: do not use this
+	* `content_numbering`: numbering mode for the course contents (chapters and exercises). One of the following:
+		* `none`: no numbers shown
+		* `arabic`: arabic numbers (1, 2, 3)
+		* `roman`: roman numbers (I, II, III)
+		* `hidden`: no numbers, but child objects may show the hierarchy in numbering.
+			If there are children (e.g., exercises are children of the module) and
+			the parent has hidden numbering, then the children may have numbers
+			such as "1.2" instead of just "2" (exercise 2 in the round 1).
+			The hidden setting is more sensible in `module_numbering` than `content_numbering`.
+	* `module_numbering`: numbering mode for the modules (exercise rounds).
+		The options are the same as for `content_numbering`.
+	* `course_description`: HTML text for the course front page
+	* `course_footer`: HTML text for the footer of the front page
 	* `exercises`: (deprecated, see modules) A list of active exercise keys
 	* `modules`: a list of
 		* `key`: part of the url
@@ -80,6 +115,7 @@ Durations are given in (int)(unit), where units are y, m, d, h or w.
 		`instructions` will be placed before the content of `instructions_file`.
 	* `max_points` (optional): The maximum exercise points (positive int).
 		Overrides any maximum points reported by test actions.
+	* `feedback`: If true, the exercise is a feedback exercise/questionnaire.
 	* `view_type`: A dotted name for an exercise implementation
 	* `submission_file_max_size`: (optional/Moodle frontend only) maximum accepted file size
 		for submissions (in bytes). The limit is checked for each file separately if
@@ -118,19 +154,11 @@ Durations are given in (int)(unit), where units are y, m, d, h or w.
 		defines how many times the student may submit before the personalized exercise is
 		regenerated (the exercise instance is changed to another one). If unset,
 		the exercise is never regenerated.
+	* `model_files`: It is a list of model answers that are available only after the deadline has passed.
+		The `model_files` take file paths as input. These paths are relative to the root of the course repository,
+		e.g., `exercises/hello_world/model.py`.
 
 	Rest of the attributes are exercise type specific.
-
-3. ### course_key/sandbox
-	A directory for sandbox environment content. Directory is copied into
-	sandbox as `/usr/local/sandbox/course_key`. In a sandbox action the
-	executables are automatically in the command path. Files beginning with
-	`install-` will be run inside the sandbox in alphabetical order during the
-	`manage_sandbox.sh` run. Before that the `scripts/sandbox` and the selected
-	`scripts/sandbox_available` install files are run.
-
-4. ### course_key/sandbox/from_sandbox_available
-	List required files from `scripts/sandbox_available` each name at one line.
 
 ## Exercise view types
 
@@ -180,28 +208,15 @@ course specific exercise view in a course specific Python module.
 		name of a template to present
 	* `accepted_message` etc as in type 1.
 
-4. ### access.types.stdasync.acceptAttachedExercise
-	Accepts attached exercise rules and user files for asynchronous
-	grading queue. Extended attributes:
-	* `template` (default `access/accept_files_default.html`):
-		name of a template to present.
-		This test is used with exercises configured externally
-		where also the creation of the form should be taken care off.
-		Post should include several file fields named `content_N` where
-		`content_0` is an exercise rule attachment and rest are
-		user files which are named by `file_N` post fields.
-		(Format is used by A+ exercises with attachments).
-	* `accepted_message` etc as in type 1.
-
 5. ### access.types.stdsync.acceptGeneralForm
-  Accepts a general form submission (can also include files) asynchronous 
-  grading queue. Extended attributes:
+	Accepts a general form submission (can also include files) asynchronous
+	grading queue. Extended attributes:
 	* `files`: list of expected files as in type 1
 	* `fields`: list of text fields as in type 2
 	* `template` (default `access/accept_general_default.html`):
 		name of a template to present
 	* `accepted_message` etc as in type 1.
-			
+
 6. ### access.types.stdsync.createForm
 	Synchronous form checker. Requires `max_points` in the
 	exercise configuration. If form has no points configured then maximum
@@ -209,6 +224,10 @@ course specific exercise view in a course specific Python module.
 	* `fieldgroups`: list of field groups
 		* `name` (optional): group name (fieldset legend)
 		* `pick_randomly` (optional): number of fields to randomly sample
+		* `resample_after_attempt` (optional): boolean. Should the questions be
+			resampled or preserved after a submission attempt in a `pick_randomly`
+			questionnaire? `true` by default, which means that the questions are
+			resampled after attempts.
 		* `group_errors` (optional): `true` to hide individual failed fields
 		* `fields`: list of fields
 			* `title` (optional): field title or label
@@ -221,30 +240,49 @@ course specific exercise view in a course specific Python module.
 			* `points` (optional): number of points to grant
 			* `required` (optional): `true` to require an answer
 			* `correct` (optional): correct answer for text fields
-			* `compare_method` (optional): `int`/`float`/`string`/`regexp`/`string-(modifier)`
-				Decides how posted value is compared to correct and feedback.
+			* `compare_method` (optional): `int`/`float`/`string`/`regexp`/`string-(modifier)`/`subdiff-(modifier)`
+				Decides how posted value is compared to correct and feedback. The `subdiff`
+				method works like `string`, but it can have multiple correct solutions delimited
+				with `|` and it shows the difference of the submission compared
+				to the correct solutions as feedback.
 				Modifiers include:
-				* ignorews: ignore white space
-        * ignorequotes: iqnore "quotes" around
-        * requirecase: require identical lower and upper cases
-        * ignorerepl: ignore REPL prefixes
-			* `regex` (deprecated): regex to match correct answer for text fields
+				* `ignorews`: ignore white space
+				* `ignorequotes`: iqnore "quotes" around
+				* `requirecase`: require identical lower and upper cases
+				* `ignorerepl`: ignore REPL prefixes
+			* `regex` (deprecated): regex to match correct answer for text fields (use compare_method instead)
 			* `options` list of options for choice fields
 				* `label`: option label
 				* `value` (optional): the unique value for the option in the form post
 				* `selected` (optional): `true` to make this initial selection
-				* `correct` (optional): `true` for correct option.
+				* `correct` (optional): `true` for correct option. "neutral" for neutral
+					options that do not affect grading (in checkbox questions).
 					Checkbox requires all and only correct
 					options selected. Radio requires one of
-					the correct options selected. If no correct
-					options are configured anything is correct.
+					the correct options selected.
+			* `partial_points`: if true, a checkbox question awards some points for partially correct answers
 			* `feedback` (optional): list of feedback messages
 				* `label`: the message
 				* `value`: show when this value is posted
 				* `not`: `true` to show when given value is NOT posted
+				* `compare_regexp`: `true` to match the posted answer to the `value` as regexp
+			* `randomized` (optional): int. The number of answer choices that are randomly
+				selected out of all choices in a checkbox question.
+			* `correct_count` (optional): int. Used with `randomized`. The number of
+				correct answer choices that are randomly selected in a checkbox question.
+			* `resample_after_attempt` (optional): boolean. Should the answer choices be
+				resampled or preserved after a submission attempt in a `randomized`
+				question? `true` by default, which means that the choices are resampled
+				after attempts.
 	* `template` (default `access/create_form_default.html`): name of a template to present
 	* `accepted_message` (optional): overrides the default message displayed when
 		submission is accepted
+	* `reveal_model_at_max_submissions` (optional): if false, the questionnaire feedback
+		does not reveal model solutions after the user has consumed all submission
+		attempts. By default false.
+	* `show_model_answer` (optional): if false, A+ does not show the model solution
+		to students after the module deadline. (In other words, mooc-grader does
+		not export a link to the model solution in aplus-json.) By default true.
 
 7. ### access.types.stdsync.comparePostValues
 	Synchronous check against posted values. Requires `max_points` in the
@@ -260,161 +298,7 @@ course specific exercise view in a course specific Python module.
 8. ### access.types.stdsync.noGrading
 	Presents a template and does not grade anything. Extended attributes:
 	* `template`: name of a template to present
-
-## Test action types
-
-Asynchronous exercises accept the submitted files into user/filename[s].
-Once the queued grading commences the configured list of `actions`
-will run in the listed order.
-
-* Common attributes for each action are
-	* `type`: A dotted name for a test action implementation
-	* `points` (optional): Overrides points reported by the action.
-		Passed action awards all points. Failed action awards zero points.
-		Unless max points is separately set this will also set the max points
-		for the action.
-	* `max_points` (optional): Overrides max points reported by the action.
-	* `title` (optional): grading action title for template
-	* `html` (optional): true to pass output as HTML in template
-	* `expect_success` (optional): true to not only stop but to set grading state
-	 	to error when the action fails, "error" to write/mail error log
-	* `continue_after_error` (optional): true to continue to subsequent actions
-		when the action fails, by default the subsequent actions are not run.
-		This setting is needed if sandbox actions are expected to run as long
-		as they can until a time limit interrupts them.
-
-	Rest of the attributes are action type specific.
-
-### Action types
-
-Common test actions are implemented in `grader.actions` and they should
-fit most purposes by configuration. However, it is possible to implement a
-course specific test actions in a course_key.actions Python module. Typically
-the actual tests should be written as programs or scripts run inside the safe
-sandbox system.
-
-1. ### grader.actions.prepare
-	Does preparations on the submitted files. Additional attributes:
-	* `attachment_pull` (optional): a TARGET file path to pull
-		*user/exercise_attachment* from *acceptAttachedExercise* view
-	* `attachment_unzip` (optional): `yes` to unzip *user/exercise_attachment*
-		from *acceptAttachedExercise* into submission root
-	* `unzip` (optional): a submitted user file name to unzip inside *user*
-		directory
-	* `charset` (optional): a character set where to convert submitted text
-		files from any recognized character sets they are in
-	* `cp_exercises` (optional): a space separated list of *path->path* where
-		source path is relative to exercise configuration e.g.
-		`exercise_dir->user` would copy contents of
-		*exercises/course_key/exercise_dir* into the submission *user*
-		directory.
-	* `cp` (optional): a space separated list of *path->path* where both paths
-		are relative to submission root e.g. `model/lib->user/lib` would
-		replicate the lib directory among the user submitted files.
-	* `mv` (optional): a space separated list of *path->path* where
-		both paths are relative to submission root e.g.
-		`user/file_name->user/new_dir/file_name`
-	* `cp_generated`: (only in personalized exercises)
-		a space separated list of *path->path* where the source path
-		is relative to the generated exercise instance assigned to the user and
-		the destination path is relative to the submission root. E.g.,
-		`seed->user/seed` copies a generated file `seed` into the submission
-		directory (assume that the exercise generator creates a file called `seed`).
-	* `cp_personal`: (only in personalized exercises)
-		a space separated list of *path->path* where the source path
-		is relative to the user's personal directory and the destination path is
-		relative to the submission root. E.g., `somefile->user/somefile`
-		copies a personal file `somefile` to the submission directory.
-
-	**Note** that the cp/mv *path->path* pattern does not replicate shell
-	command arguments. Either dir->dir contents or individual file->file is
-	inserted creating new parent directories if required.
-
-2. ### grader.actions.sandbox
-	Executes a command inside the chroot sandbox as a restricted user.
-	Picks points from `TotalPoints: N` and/or `MaxPoints: N` lines if
-	printed out. Additional attributes:
-	* `cmd`: command line as an ARRAY
-	* `dir` (optional): sandboxed path relative to submission root,
-		default is *user*
-	* `net` (optional): `true` to use network enabled sandbox user
-	* `time` (optional): limit the seconds the command can run
-	* `memory` (optional): limit the memory bytes (address space) the command
-		can take, use 10k for kilobytes and 10m for megabytes
-	* `files` (optional): limit the number of file descriptors the command can
-		open
-	* `disk` (optional): limit the disk bytes the command can write, use 10k
-		for kilobytes and 10m for megabytes
-
-3. ### grader.actions.sandbox_python_test
-	Executes a command that should run a Python unittest inside the chroot
-	sandbox as a restricted user. This is identical to the normal sandbox
-	action except that the stderr (unittest output) is presented as stdout and
-	the real stdout is nulled. Note that at the end of the complete test run
-	(e.g. def tearDownClass) the `TotalPoints: N` and `MaxPoints: N` lines
-	should be printed out.
-
-4. ### grader.actions.gitlabquery
-	Requires the *acceptGitAddress* view type with *require_gitlab* set.
-	Queries the Gitlab API and checks desired properties. Additional attributes:
-	* `token`: a Gitlab account private token for API access
-	* `private` (optional): `yes` to stop if repository has public access
-	* `forks` (optional): Project ID to stop if not forked from this project
-
-5. ### grader.actions.gitclone
-	Works with the *acceptGitAddress* view type. Tries to clone the
-	repository. Additional attributes:
-	* `files` (optional): a space separated list of files to select for
-		submission from the repository. The files are moved into
-		*user/filename[s]* and contents are listed in the feedback.
-	* `repo_dir` (optional): the clone directory, default *user-repo*
-	* `read` (optional): override the file where the git address is read from
-
-6. ### grader.actions.expaca
-	Executes the expaca testing application which compares outputs of a model
-	and the student solutions. Expaca is not freely available. This action
-	assumes that expaca is properly installed. Additional attributes:
-	* `rule_file` (optional): default `checkingRule.xml`
-	* `model_dir` (optional): default `model`
-	* `user_dir` (optional): default `user`
-	* `xslt_transform` (optional): a name of an XSL style file for
-		transforming expaca XML output e.g. `expaca/xsl/aplus-utf8.xsl`
-
-7. ### grader.actions.store_user_files
-	Stores files from the submission directory to the user's personal directory.
-	This can be used to store grading output files for future use in grading.
-	Requires that the exercise is personalized and the project settings have
-	enabled personal directories (`settings.ENABLE_PERSONAL_DIRECTORIES`)
-	(so that the personal directory exists).
-	* `cp`: a space separated list of *path->path* where the source path is
-		relative to the submission root and the destination is relative to the
-		personal directory of the user. E.g., `user/someoutput->output` stores
-		`someoutput` to `output` file in the personal directory of the user.
-
-## Default sandbox scripts
-
-Following common scripts are provided by default and copied into the sandbox.
-However, the common scripts may have sandbox install requirements that are not
-met by default. Both the /usr/local/sandbox and /usr/local/sandbox/course_key
-are in the sandbox execution path and may be included in sandbox command line.
-
-1. ### java_compile.sh
-	Compiles all java files in submission. Takes arguments:
-	* `--cp` (optional): classpath to use
-	* `--clean` (optional): `yes` to remove java source after compilation
-
-2. ### scala_compile.sh
-	Compiles all scala files in submission. Takes arguments:
-	* `--cp` (optional): classpath to use
-	* `--clean` (optional): `yes` to remove scala source after compilation
-
-3. ### virtualenv.sh envname cmd [arguments..]
-	Activates the named Python virtualenv and passes rest for a command.
-
-4. ### template.sh
-	An example of a grading shell script. Will list submission files and
-	always grade 10/10 points.
-
+	
 ## Templates
 
 Many type views can use a named template. The templates can be placed in
@@ -437,7 +321,6 @@ listed below.
 		* `error`: True on failed POST
 		* `missing_url`: True if no submission_url provided
 		* `missing_files`: True if files missing
-		* `missing_file_name`: True if file name missing
 		* `invalid_address`: True if Gitlab address is rejected
 		* `accepted`: True if accepted for grading
 		* `wait`: True if the grading should be finished in a moment

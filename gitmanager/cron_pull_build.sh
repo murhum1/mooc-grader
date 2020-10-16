@@ -2,13 +2,13 @@
 
 TRY_PYTHON=$1
 key=$2
-id=$3
-url=$4
-branch=$5
-echo "Processing key=$key id=$id url=$url branch=$branch python=$TRY_PYTHON"
+url=$3
+branch=$4
+echo "Processing key=$key url=$url branch=$branch python=$TRY_PYTHON"
 
-if [ -z "$key" -o -z "$id" -o -z "$url" -o -z "$branch" ]; then
+if [ -z "$key" -o -z "$url" -o -z "$branch" ]; then
     echo "  Some arguments are missing, skipping..."
+    exit 1
 fi
 
 if [ -d exercises ]; then
@@ -33,6 +33,7 @@ if [ -e $dir ]; then
     git checkout -q $branch
   fi
   git reset -q --hard origin/$branch
+  git submodule sync --recursive
   git submodule update --init --recursive
   git --no-pager log --pretty=format:"------------;Commit metadata;;Hash:;%H;Subject:;%s;Body:;%b;Committer:;%ai;%ae;Author:;%ci;%cn;%ce;------------;" -1 | tr ';' '\n'
 else

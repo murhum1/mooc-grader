@@ -9,14 +9,17 @@ import copy
 import os
 import json
 
-from access.config import config, DEFAULT_LANG
-from util.files import read_and_remove_submission_meta, clean_submission_dir
-from util.queue import queue_length as qlength
+from access.config import DEFAULT_LANG, ConfigError, config
+from util import export
+from util.files import (
+    clean_submission_dir,
+    read_and_remove_submission_meta,
+    write_submission_meta,
+)
 from util.http import post_data
 from util.importer import import_named
 from util.monitored_dict import MonitoredDict
 from util.personalized import read_generated_exercise_file
-from util import export
 from util.templates import template_to_str
 
 
@@ -69,7 +72,17 @@ def exercise(request, course_key, exercise_key):
     (course, exercise, lang) = _get_course_exercise_lang(course_key, exercise_key, lang)
 
     # Try to call the configured view.
-    return import_named(course, exercise['view_type'])(request, course, exercise, post_url)
+    try:
+        return import_named(course, exercise['view_type'])(request, course, exercise, post_url)
+    except ConfigError as error:
+        return render(request, 'access/exercise_config_error.html', {
+            'course': course,
+            'exercise': exercise,
+            'config_error': str(error),
+            'result': {
+                'error': True,
+            },
+        })
 
 
 def exercise_ajax(request, course_key, exercise_key):
@@ -152,8 +165,11 @@ def exercise_template(request, course_key, exercise_key, parameter=None):
         path = find_name(exercise['template_files'], parameter)
 
     if path:
-        with open(os.path.join(course['dir'], path)) as f:
-            content = f.read()
+        try:
+            with open(os.path.join(course['dir'], path)) as f:
+                content = f.read()
+        except FileNotFoundError as error:
+            raise Http404("Template file missing") from error
         response = HttpResponse(content, content_type='text/plain')
     else:
         try:
@@ -174,9 +190,29 @@ def aplus_json(request, course_key):
     course = config.course_entry(course_key)
     if course is None:
         raise Http404()
-    data = _copy_fields(course, ["name", "description", "lang", "contact",
-        "assistants", "start", "end", "categories",
-        "numerate_ignoring_modules"])
+    data = _copy_fields(course, [
+        "archive_time",
+        "assistants",
+        "categories",
+        "contact",
+        "content_numbering",
+        "course_description",
+        "course_footer",
+        "description",
+        "end",
+        "enrollment_audience",
+        "enrollment_end",
+        "enrollment_start",
+        "head_urls",
+        "index_mode",
+        "lang",
+        "lifesupport_time",
+        "module_numbering",
+        "name",
+        "numerate_ignoring_modules",
+        "start",
+        "view_content_to",
+    ])
     if "language" in course:
         data["lang"] = course["language"]
 
@@ -206,13 +242,6 @@ def aplus_json(request, course_key):
     if "gitmanager" in settings.INSTALLED_APPS:
         data["build_log_url"] = request.build_absolute_uri(reverse("build-log-json", args=(course_key, )))
     return JsonResponse(data)
-
-
-def queue_length(request):
-    '''
-    Reports the current queue length.
-    '''
-    return HttpResponse(qlength())
 
 
 def test_result(request):
@@ -247,7 +276,7 @@ def generated_exercise_file(request, course_key, exercise_key, exercise_instance
         import magic
         for gen_file_conf in exercise["generated_files"]:
             if gen_file_conf["file"] == filename:
-                if "allow_download" in gen_file_conf and gen_file_conf["allow_download"]:
+                if gen_file_conf.get("allow_download", False):
                     file_content = read_generated_exercise_file(course, exercise,
                                                                 exercise_instance, filename)
                     response = HttpResponse(file_content,
@@ -380,5 +409,6 @@ def container_post(request):
     data["feedback"] = feedback
 
     if not post_data(meta["url"], data):
-        raise IOError("Failed to deliver results")
+        write_submission_meta(sid, meta)
+        return HttpResponse("Failed to deliver results", status=502)
     return HttpResponse("Ok")

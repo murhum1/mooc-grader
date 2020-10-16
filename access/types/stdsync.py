@@ -20,30 +20,11 @@ Functions take arguments:
 '''
 from django.core.exceptions import PermissionDenied
 
-from util.cache import InProcessCache
 from util.http import not_modified_since, not_modified_response, cache_headers
 from util.templates import render_configured_template, render_template
 from .forms import GradedForm
 from .auth import make_hash, get_uid
 from ..config import ConfigError
-
-
-# Hold on to nonces for some time.
-nonces = InProcessCache(limit=100)
-
-
-def acceptNonce(request):
-    '''
-    Post containing unique _nonce is only accepted once.
-    '''
-    if request.method == 'POST':
-        if '_nonce' in request.POST:
-            nonce = str(request.POST['_nonce'])
-            if nonce in nonces:
-                raise PermissionDenied('Repeating nonce')
-            nonces[nonce] = True
-            return True
-        return False
 
 
 def noGrading(request, course, exercise, post_url):
@@ -115,11 +96,6 @@ def createForm(request, course, exercise, post_url):
     '''
     if "max_points" not in exercise:
         raise ConfigError("Missing required \"max_points\" in exercise configuration")
-    try:
-        acceptNonce(request)
-    except PermissionDenied:
-        return render_template(request, course, exercise, post_url,
-            'access/exercise_frame.html', { "error":True, "nonce_used":True })
 
     last = False
     if request.method == 'POST':
@@ -130,8 +106,15 @@ def createForm(request, course, exercise, post_url):
             pass
         last = max_n > 0 and n >= max_n
 
-    form = GradedForm(request.POST or None, request.FILES or None,
-        exercise=exercise, show_correct_once=last)
+    try:
+        form = GradedForm(request.POST or None, request.FILES or None,
+            exercise=exercise, reveal_correct=last, request=request)
+    except PermissionDenied:
+        # Randomized forms raise PermissionDenied when the POST data contains
+        # forged checksums or samples. It could be cleaner to check those
+        # in the form validation, but the old code raises an exception like this.
+        return render_template(request, course, exercise, post_url,
+            'access/exercise_frame.html', { "rejected": True, "invalid_checksum": True })
 
     # Support caching of non personalized forms.
     if not form.randomized and not_modified_since(request, exercise):
@@ -145,7 +128,7 @@ def createForm(request, course, exercise, post_url):
         points = pointsInRange(points, exercise["max_points"])
 
         # Allow passing to asynchronous grading.
-        if "actions" in exercise or "container" in exercise:
+        if "container" in exercise:
             from .stdasync import _saveForm
             return _saveForm(request, course, exercise, post_url, form)
 
@@ -168,11 +151,17 @@ def createForm(request, course, exercise, post_url):
 
 
 def createFormModel(request, course, exercise, parameter):
-    form = GradedForm(None, exercise=exercise, show_correct=True)
+    form = GradedForm(None, exercise=exercise, model_answer=True)
     form.bind_initial()
     points,error_groups,error_fields = form.grade()
-    result = { "form": form, "accepted": True, "points": points,
-        "error_groups": error_groups, "error_fields": error_fields }
+    result = {
+        "form": form,
+        "accepted": True,
+        "points": points,
+        "error_groups": error_groups,
+        "error_fields": error_fields,
+        "model_answer": True,
+    }
     return render_template(request, course, exercise, None,
         'access/graded_form.html', result)
 

@@ -33,13 +33,11 @@ from util.files import create_submission_dir, save_submitted_file, \
 from util.http import not_modified_since, not_modified_response, cache_headers
 from util.personalized import select_generated_exercise_instance, \
     user_personal_directory_path
-from util.queue import queue_length
 from util.shell import invoke
 from util.templates import render_configured_template, render_template, \
     template_to_str
 from .auth import make_hash, get_uid
 from ..config import ConfigError, DIR
-from .. import tasks
 
 
 LOGGER = logging.getLogger('main')
@@ -49,7 +47,6 @@ def acceptPost(request, course, exercise, post_url):
     '''
     Presents a template and accepts post value for grading queue.
     '''
-    _requireActions(exercise)
     if not_modified_since(request, exercise):
         return not_modified_response(request, exercise)
 
@@ -89,7 +86,6 @@ def acceptFiles(request, course, exercise, post_url):
     '''
     Presents a template and accepts files for grading queue.
     '''
-    _requireActions(exercise)
     if not_modified_since(request, exercise):
         return not_modified_response(request, exercise)
 
@@ -131,70 +127,10 @@ def acceptFiles(request, course, exercise, post_url):
     )
 
 
-def acceptAttachedExercise(request, course, exercise, post_url):
-    '''
-    Accepts attached exercise rules and user files for queue.
-    '''
-    _requireActions(exercise)
-    if not_modified_since(request, exercise):
-        return not_modified_response(request, exercise)
-
-    result = None
-
-    # Receive post.
-    if request.method == "POST":
-
-        # Search for file contents.
-        if "file[]" in request.FILES:
-            file_list = request.FILES.getlist("file[]")
-        else:
-            file_list = []
-            i = 0
-            while "content_%d" % (i) in request.FILES:
-                file_list.append(request.FILES["content_%d" % (i)])
-                i += 1
-
-        # Store submitted files.
-        if not file_list:
-            result = { "rejected":True, "missing_files":True }
-        else:
-            sdir = create_submission_dir(course, exercise)
-            i = 0
-            for content in file_list:
-                if i > 0:
-                    key = "file_%d" % (i)
-                    if not key in request.POST or not request.POST[key]:
-                        result = { "error": True, "missing_file_name": True }
-                        clean_submission_dir(sdir)
-                        break
-                    save_submitted_file(sdir, request.POST[key], content)
-                else:
-                    save_submitted_file(sdir, "exercise_attachment", content)
-                i += 1
-            if result is None:
-                return _acceptSubmission(request, course, exercise, post_url, sdir)
-
-    # Add the attachment as a hint to the default view form.
-    if result is None:
-        import copy
-        exercise = copy.deepcopy(exercise)
-        exercise["files"] = [ { "field": "content_0", "name": "exercise_attachment" } ]
-
-    return cache_headers(
-        render_configured_template(
-            request, course, exercise, post_url,
-            "access/accept_files_default.html", result
-        ),
-        request,
-        exercise
-    )
-
-
 def acceptGitAddress(request, course, exercise, post_url):
     '''
     Presents a template and accepts Git URL for grading.
     '''
-    _requireActions(exercise)
     if not_modified_since(request, exercise):
         return not_modified_response(request, exercise)
 
@@ -245,7 +181,6 @@ def acceptGitUser(request, course, exercise, post_url):
     '''
     auth_secret = "*AYVhD'b5,hKzf/6"
 
-    _requireActions(exercise)
     if not "git_address" in exercise:
         raise  ConfigError("Missing \"git_address\" in exercise configuration.")
 
@@ -272,8 +207,6 @@ def acceptGeneralForm(request, course, exercise, post_url):
     Presents a template and accepts form containing any input types 
     (text, file, etc) for grading queue.
     '''
-
-    _requireActions(exercise)
     if not_modified_since(request, exercise):
         return not_modified_response(request, exercise)
 
@@ -330,20 +263,16 @@ def acceptGeneralForm(request, course, exercise, post_url):
         exercise
     )    
 
-
-def _requireActions(exercise):
-    '''
-    Checks that some actions are set.
-    '''
-    if "actions" not in exercise or len(exercise["actions"]) == 0:
-        if not settings.CONTAINER_MODE or "container" not in exercise:
-            raise ConfigError("Missing \"actions\" in exercise configuration.")
-
-
 def _requireContainer(exercise):
     c = exercise.get("container", {})
+    a = exercise.get("actions", {})
+
+    if c and a:
+        LOGGER.warning("The `actions` parameter defined in your config.yaml is no longer used by the mooc-grader." 
+        "Therefore, you should remove it from your config.yaml and make use of the `container`.")
     if not c or not "image" in c or not "mount" in c or not "cmd" in c:
         raise ConfigError("Missing or invalid \"container\" in exercise configuration.")
+    
     return c
 
 
@@ -362,22 +291,6 @@ def _acceptSubmission(request, course, exercise, post_url, sdir):
     '''
     uids = get_uid(request)
     attempt = int(request.GET.get("ordinal_number", 1))
-    container_flag = settings.CONTAINER_MODE and "container" in exercise
-
-    # Backup synchronous grading.
-    if not container_flag and not settings.CELERY_BROKER:
-        LOGGER.warning("No queue configured")
-        from grader.runactions import runactions
-        r = runactions(course, exercise, sdir, uids, attempt)
-        html = template_to_str(course, exercise, "", r["template"], r["result"])
-        return render_template(request, course, exercise, post_url,
-            "access/async_accepted.html", {
-                "synchronous": True,
-                "accepted": True,
-                "max_points": r["result"].get("max_points", 1),
-                "points": r["result"].get("points", 0),
-                "feedback": html,
-            })
 
     if "submission_url" in request.GET:
         surl = request.GET["submission_url"]
@@ -387,68 +300,51 @@ def _acceptSubmission(request, course, exercise, post_url, sdir):
         surl = request.build_absolute_uri(reverse('test-result'))
         surl_missing = True
 
-    _acceptSubmission.counter += 1
-
     # Order container for grading.
-    if container_flag:
-        c = _requireContainer(exercise)
+    c = _requireContainer(exercise)
 
-        course_extra = {
-            "key": course["key"],
-            "name": course["name"],
-        }
-        exercise_extra = {
-            "key": exercise["key"],
-            "title": exercise.get("title", None),
-            "resources": c.get("resources", {}), # Unofficial param, implemented differently later
-            "require_constant_environment": c.get("require_constant_environment", False) # Unofficial param, implemented differently later
-        }
-        if exercise.get("personalized", False):
-            exercise_extra["personalized_exercise"] \
-                = select_generated_exercise_instance(course, exercise, uids, attempt)
-            if settings.ENABLE_PERSONAL_DIRECTORIES:
-                exercise_extra["personal_directory"] \
-                    = user_personal_directory_path(course, exercise, uids)
+    course_extra = {
+        "key": course["key"],
+        "name": course["name"],
+    }
+    exercise_extra = {
+        "key": exercise["key"],
+        "title": exercise.get("title", None),
+        "resources": c.get("resources", {}), # Unofficial param, implemented differently later
+        "require_constant_environment": c.get("require_constant_environment", False) # Unofficial param, implemented differently later
+    }
+    if exercise.get("personalized", False):
+        exercise_extra["personalized_exercise"] \
+            = select_generated_exercise_instance(course, exercise, uids, attempt)
 
-        sid = os.path.basename(sdir)
-        write_submission_meta(sid, {
-            "url": surl,
-            "dir": sdir,
-            "course_key": course["key"],
-            "exercise_key": exercise["key"],
-            "lang": translation.get_language(),
-        })
-        r = invoke([
-            settings.CONTAINER_SCRIPT,
-            sid,
-            request.scheme + "://" + request.get_host(),
-            c["image"],
-            os.path.join(DIR, course["key"], c["mount"]),
-            sdir,
-            c["cmd"],
-            json.dumps(course_extra),
-            json.dumps(exercise_extra),
-        ])
-        LOGGER.debug("Container order exit=%d out=%s err=%s",
-            r["code"], r["out"], r["err"])
-        qlen = 1
-
-    # Queue in celery & rabbitmq for chroot sandbox actions.
-    else:
-        tasks.grade.delay(course["key"], exercise["key"],
-            translation.get_language(), surl, sdir, uids, attempt)
-        qlen = queue_length()
-        LOGGER.debug("Submission of %s/%s, queue counter %d, queue length %d",
-            course["key"], exercise["key"], _acceptSubmission.counter, qlen)
-        if qlen >= settings.QUEUE_ALERT_LENGTH:
-            LOGGER.error("Queue alert, length: %d", qlen)
+    sid = os.path.basename(sdir)
+    write_submission_meta(sid, {
+        "url": surl,
+        "dir": sdir,
+        "course_key": course["key"],
+        "exercise_key": exercise["key"],
+        "lang": translation.get_language(),
+    })
+    r = invoke([
+        settings.CONTAINER_SCRIPT,
+        sid,
+        request.scheme + "://" + request.get_host(),
+        c["image"],
+        os.path.join(DIR, course["key"], c["mount"]),
+        sdir,
+        c["cmd"],
+        json.dumps(course_extra),
+        json.dumps(exercise_extra),
+    ])
+    LOGGER.debug("Container order exit=%d out=%s err=%s",
+        r["code"], r["out"], r["err"])
+    qlen = 1
 
     return render_template(request, course, exercise, post_url,
         "access/async_accepted.html", {
+            "error": r['code'] != 0,
             "accepted": True,
             "wait": True,
             "missing_url": surl_missing,
             "queue": qlen
         })
-
-_acceptSubmission.counter = 0
